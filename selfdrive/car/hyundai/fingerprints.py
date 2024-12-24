@@ -289,6 +289,7 @@ FW_VERSIONS = {
       b'\xf1\x00TM__ SCC FHCUP      1.00 1.01 99110-S1500         ',
     ],
     (Ecu.abs, 0x7d1, None): [
+      b'\xf1\x00TM ESC \x1b 102 \x08\x08 58910-S1DA0',
       b'\xf1\x00TM ESC \x01 102!\x04\x03 58910-S2DA0',
       b'\xf1\x00TM ESC \x01 104"\x10\x07 58910-S2DA0',
       b'\xf1\x00TM ESC \x02 101 \x08\x04 58910-S2GA0',
@@ -302,6 +303,7 @@ FW_VERSIONS = {
       b'\xf1\x00TM ESC   103!\x030 58910-S1MA0',
     ],
     (Ecu.eps, 0x7d4, None): [
+      b'\xf1\x00TM  MDPS R 1.00 1.05 57700-S1500 4TSDP105',
       b'\xf1\x00TM  MDPS C 1.00 1.01 56310-S1AB0 4TSDC101',
       b'\xf1\x00TM  MDPS C 1.00 1.01 56310-S1EB0 4TSDC101',
       b'\xf1\x00TM  MDPS C 1.00 1.02 56370-S2AA0 0B19',
