@@ -207,6 +207,7 @@ class CarState(CarStateBase):
   def update_canfd(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
+    is_lx3 = self.CP.carFingerprint == CAR.HYUNDAI_PALISADE_HEV_2026
 
     ret = structs.CarState()
 
@@ -220,8 +221,14 @@ class CarState(CarStateBase):
 
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
-    ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
-    ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
+    # LX3: standard DOORS_SEATBELTS (0x411) and BLINKERS (0x413) do not exist
+    if is_lx3:
+      ret.doorOpen = cp.vl["DOORS_LX3"]["DRIVER_DOOR"] == 1
+      # LX3 seatbelt signal (0x401) is event-pulse only, not level — disable check until persistent signal found
+      ret.seatbeltUnlatched = False
+    else:
+      ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
+      ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
 
     gear = cp.vl[self.gear_msg_canfd]["GEAR"]
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
@@ -243,12 +250,17 @@ class CarState(CarStateBase):
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > self.params.STEER_THRESHOLD, 5)
     ret.steerFaultTemporary = cp.vl["MDPS"]["LKA_FAULT"] != 0
 
-    # TODO: alt signal usage may be described by cp.vl['BLINKERS']['USE_ALT_LAMP']
-    left_blinker_sig, right_blinker_sig = "LEFT_LAMP", "RIGHT_LAMP"
-    if self.CP.carFingerprint == CAR.HYUNDAI_KONA_EV_2ND_GEN:
-      left_blinker_sig, right_blinker_sig = "LEFT_LAMP_ALT", "RIGHT_LAMP_ALT"
-    ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, cp.vl["BLINKERS"][left_blinker_sig],
-                                                                      cp.vl["BLINKERS"][right_blinker_sig])
+    # LX3: blinkers on separate addresses 0x35A/0x35B instead of standard 0x413
+    if is_lx3:
+      ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(
+        50, cp.vl["BLINKERS_LX3_LEFT"]["LEFT_LAMP"], cp.vl["BLINKERS_LX3_RIGHT"]["RIGHT_LAMP"])
+    else:
+      # TODO: alt signal usage may be described by cp.vl['BLINKERS']['USE_ALT_LAMP']
+      left_blinker_sig, right_blinker_sig = "LEFT_LAMP", "RIGHT_LAMP"
+      if self.CP.carFingerprint == CAR.HYUNDAI_KONA_EV_2ND_GEN:
+        left_blinker_sig, right_blinker_sig = "LEFT_LAMP_ALT", "RIGHT_LAMP_ALT"
+      ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, cp.vl["BLINKERS"][left_blinker_sig],
+                                                                        cp.vl["BLINKERS"][right_blinker_sig])
     if self.CP.enableBsm:
       ret.leftBlindspot = cp.vl["BLINDSPOTS_REAR_CORNERS"]["FL_INDICATOR"] != 0
       ret.rightBlindspot = cp.vl["BLINDSPOTS_REAR_CORNERS"]["FR_INDICATOR"] != 0
@@ -291,13 +303,26 @@ class CarState(CarStateBase):
                         *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
                         *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
 
-    ret.blockPcmEnable = not self.recent_button_interaction()
+    # LX3: button timing mismatch — allow stock PCM to handle engagement freely
+    if is_lx3:
+      ret.blockPcmEnable = False
+    else:
+      ret.blockPcmEnable = not self.recent_button_interaction()
 
     return ret
 
   def get_can_parsers_canfd(self, CP):
     msgs = []
-    if not (CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS):
+    is_lx3 = CP.carFingerprint == CAR.HYUNDAI_PALISADE_HEV_2026
+
+    if is_lx3:
+      # LX3: register non-standard messages; use 0 frequency to skip alive checks
+      msgs += [
+        ("DOORS_LX3", 0),
+        ("BLINKERS_LX3_LEFT", 0),
+        ("BLINKERS_LX3_RIGHT", 0),
+      ]
+    elif not (CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS):
       # TODO: this can be removed once we add dynamic support to vl_all
       msgs += [
         # this message is 50Hz but the ECU frequently stops transmitting for ~0.5s
