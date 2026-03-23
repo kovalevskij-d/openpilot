@@ -77,6 +77,9 @@ function launch {
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
+  # LX3 debug auto-logger (temporary — remove after testing)
+  /usr/local/venv/bin/python $DIR/selfdrive/debug/lx3_debug.py --mode autolog &
+
   # start manager
   cd system/manager
   if [ ! -f $DIR/prebuilt ]; then

@@ -6,10 +6,14 @@ Run on comma 4 via SSH:
   cd /data/openpilot && python3 selfdrive/debug/lx3_debug.py
 
 Modes:
-  --mode signals   : live view of key parsed signals (default)
-  --mode can       : raw CAN monitor for LX3-specific addresses
+  --mode signals     : live view of key parsed signals (default)
+  --mode can         : raw CAN monitor for LX3-specific addresses
   --mode fingerprint : show fingerprint detection result
-  --log FILE       : also write output to a log file
+  --mode autolog     : background logger — starts on boot, waits for car, logs everything
+  --log FILE         : also write output to a log file
+
+Auto-start on boot (add to launch_chffrplus.sh):
+  PYTHONPATH=/data/openpilot /usr/local/venv/bin/python /data/openpilot/selfdrive/debug/lx3_debug.py --mode autolog &
 """
 
 import argparse
@@ -261,11 +265,141 @@ def mode_fingerprint(args):
   print("ERROR: carParams not received within 60 seconds. Is openpilot running?")
 
 
+def mode_autolog(args):
+  """Background auto-logger: waits for car, logs fingerprint + signals + raw CAN continuously."""
+  import cereal.messaging as messaging
+
+  LOG_DIR = "/data/lx3_logs"
+  os.makedirs(LOG_DIR, exist_ok=True)
+  session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+  log_path = os.path.join(LOG_DIR, f"lx3_{session_id}.log")
+  can_log_path = os.path.join(LOG_DIR, f"lx3_can_{session_id}.log")
+
+  with open(log_path, 'w') as logfile:
+    logfile.write(f"LX3 Auto-Logger started — {datetime.now().isoformat()}\n")
+    logfile.write(f"Waiting for openpilot and car...\n\n")
+    logfile.flush()
+
+    # Phase 1: wait for carParams (fingerprint)
+    sm = messaging.SubMaster(['carParams', 'carState', 'pandaStates'])
+    fingerprinted = False
+
+    while not fingerprinted:
+      sm.update(2000)
+      if sm.updated['carParams'] and sm['carParams'].carFingerprint:
+        cp = sm['carParams']
+        logfile.write(f"{'='*60}\n")
+        logfile.write(f"CAR IDENTIFIED — {datetime.now().isoformat()}\n")
+        logfile.write(f"{'='*60}\n")
+        logfile.write(f"  Fingerprint: {cp.carFingerprint}\n")
+        logfile.write(f"  Brand: {cp.brand}\n")
+        logfile.write(f"  Flags: {cp.flags}\n")
+        logfile.write(f"  Safety: {cp.safetyConfigs[0].safetyModel if len(cp.safetyConfigs) > 0 else 'N/A'}\n")
+        logfile.write(f"  Safety param: {cp.safetyConfigs[0].safetyParam if len(cp.safetyConfigs) > 0 else 'N/A'}\n")
+        logfile.write(f"  OP longitudinal: {cp.openpilotLongitudinalControl}\n")
+        logfile.write(f"  PCM cruise: {cp.pcmCruise}\n")
+        logfile.write(f"  Radar unavail: {cp.radarUnavailable}\n")
+        logfile.write(f"  Enable BSM: {cp.enableBsm}\n")
+        logfile.write(f"  Dashcam only: {cp.dashcamOnly}\n")
+        logfile.write(f"  Wheelbase: {cp.wheelbase:.3f} m\n")
+        logfile.write(f"  Steer ratio: {cp.steerRatio:.1f}\n")
+        logfile.write(f"  Mass: {cp.mass:.0f} kg\n")
+        logfile.write(f"\n  ECU firmware:\n")
+        for fw in cp.carFw:
+          logfile.write(f"    {fw.ecu}: addr=0x{fw.address:X} — {bytes(fw.fwVersion)}\n")
+        logfile.write(f"\n")
+        logfile.flush()
+        fingerprinted = True
+      else:
+        # Log panda state while waiting
+        if sm.updated.get('pandaStates') and len(sm['pandaStates']) > 0:
+          ps = sm['pandaStates'][0]
+          logfile.write(f"[{datetime.now().strftime('%H:%M:%S')}] Waiting... "
+                        f"ignition_line={ps.ignitionLine} ignition_can={ps.ignitionCan} "
+                        f"voltage={ps.voltage/1000:.2f}V faults={ps.faults}\n")
+          logfile.flush()
+
+    # Phase 2: continuous signal + CAN logging
+    logfile.write(f"\n{'='*60}\nContinuous logging started\n{'='*60}\n\n")
+    logfile.flush()
+
+    logcan = messaging.sub_sock('can')
+    can_log = open(can_log_path, 'w')
+    can_log.write(f"# LX3 CAN log — {datetime.now().isoformat()}\n")
+    can_log.write(f"# timestamp,addr_hex,bus,data_hex\n")
+
+    last_signal_log = 0
+    can_msg_counts = defaultdict(int)
+
+    while True:
+      # Log raw CAN for LX3 addresses
+      can_recv = messaging.drain_sock(logcan)
+      for x in can_recv:
+        for y in x.can:
+          key = (y.address, y.src)
+          if key in LX3_ADDRS:
+            can_msg_counts[key] += 1
+            hex_data = binascii.hexlify(y.dat).decode('ascii')
+            can_log.write(f"{time.time():.3f},0x{y.address:03X},{y.src},{hex_data}\n")
+
+      # Log parsed signals every 2 seconds
+      sm.update(0)
+      now = time.time()
+      if now - last_signal_log >= 2.0 and sm.valid.get('carState'):
+        cs = sm['carState']
+        logfile.write(json.dumps({
+          "t": round(now, 3),
+          "ts": datetime.now().strftime('%H:%M:%S'),
+          "speed_kmh": round(cs.vEgo * 3.6, 1),
+          "steerAngle": round(cs.steeringAngleDeg, 1),
+          "steerTorque": round(cs.steeringTorque, 1),
+          "steerPressed": cs.steeringPressed,
+          "steerFault": cs.steerFaultTemporary,
+          "gas": cs.gasPressed,
+          "brake": cs.brakePressed,
+          "standstill": cs.standstill,
+          "cruiseAvail": cs.cruiseState.available,
+          "cruiseEnabled": cs.cruiseState.enabled,
+          "cruiseSpeed": round(cs.cruiseState.speed * 3.6, 1),
+          "door": cs.doorOpen,
+          "seatbelt": cs.seatbeltUnlatched,
+          "blinkerL": cs.leftBlinker,
+          "blinkerR": cs.rightBlinker,
+          "gear": str(cs.gearShifter),
+          "accFault": cs.accFaulted,
+          "blockPcm": cs.blockPcmEnable,
+        }) + "\n")
+        logfile.flush()
+        can_log.flush()
+        last_signal_log = now
+
+        # Every 30 seconds, log CAN message summary
+        if int(now) % 30 == 0:
+          logfile.write(f"\n# CAN summary at {datetime.now().strftime('%H:%M:%S')}:\n")
+          for key in sorted(can_msg_counts.keys()):
+            addr, bus = key
+            logfile.write(f"#   0x{addr:03X} bus{bus}: {can_msg_counts[key]} msgs — {LX3_ADDRS.get(key, '?')}\n")
+          # Check missing
+          missing = set(LX3_ADDRS.keys()) - set(can_msg_counts.keys())
+          if missing:
+            logfile.write(f"#   MISSING:\n")
+            for key in sorted(missing):
+              addr, bus = key
+              logfile.write(f"#     0x{addr:03X} bus{bus} — {LX3_ADDRS[key]}\n")
+          logfile.write("\n")
+          logfile.flush()
+
+      time.sleep(0.01)
+
+
+import os
+
+
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="LX3 Palisade Hybrid 2026 debug monitor",
                                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument("--mode", choices=["signals", "can", "fingerprint"], default="signals",
-                      help="signals=parsed state, can=raw CAN, fingerprint=car detection")
+  parser.add_argument("--mode", choices=["signals", "can", "fingerprint", "autolog"], default="signals",
+                      help="signals=parsed state, can=raw CAN, fingerprint=car detection, autolog=background logger")
   parser.add_argument("--log", type=str, default=None,
                       help="log output to file (e.g. /data/lx3_debug.log)")
 
@@ -277,3 +411,5 @@ if __name__ == "__main__":
     mode_can(args)
   elif args.mode == "fingerprint":
     mode_fingerprint(args)
+  elif args.mode == "autolog":
+    mode_autolog(args)
