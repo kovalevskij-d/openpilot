@@ -477,17 +477,11 @@ FW_VERSIONS = {
     (Ecu.fwdCamera, 0x7c4, None): [
       b'\xf1\x00LX31.001.001.002591000HKP_LX325_50919099211P9030',
     ],
+    # engine (0x7E0) and transmission (0x7E1) are not queried by Hyundai FW config —
+    # they get tagged as subaru/volkswagen brand and break matching. Only keep ECUs
+    # that the Hyundai query returns with brand="hyundai".
     (Ecu.hvac, 0x7b3, None): [
       b'\xf1\x00LX3   97255-DU040CONTROL UNIT        2561.1.05.00 v24.05.01   ',
-    ],
-    (Ecu.engine, 0x7e0, None): [
-      b'\xf1\x87391X62S001\xf1\x822541LXRHHMXXXX9C',
-      b'2541LXRHHMXXXX9C',
-    ],
-    (Ecu.transmission, 0x7e1, None): [
-      b'\xf1\x87954413U010\xf1\x89P26\x00\x00\x00\x00\x00\x00\x00\xf1\x822532HLX3T25HXGS2',
-      b'\xf1\x00PSBG2913  P26\x00\x00\x00\x00\x00\x00\x002532HLX3T25HXGS2\xd2A\x97_',
-      b'2532HLX3T25HXGS2',
     ],
     (Ecu.combinationMeter, 0x7c6, None): [
       b'\xf1\x00471',
