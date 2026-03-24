@@ -335,9 +335,17 @@ class CarState(CarStateBase):
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
     }
 
-    # LX3: counter increments by 2 instead of 1 — disable counter validation for all messages
+    # LX3: counter increments by 2 instead of 1 — monkey-patch _add_message
+    # to set ignore_counter on every message (including lazily-added ones)
     if is_lx3:
       for parser in parsers.values():
+        original_add = parser._add_message
+        def patched_add(name_or_addr, freq=None, _orig=original_add, _parser=parser):
+          _orig(name_or_addr, freq)
+          for state in _parser.message_states.values():
+            state.ignore_counter = True
+        parser._add_message = patched_add
+        # Also patch already-registered messages
         for state in parser.message_states.values():
           state.ignore_counter = True
 
