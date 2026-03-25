@@ -56,6 +56,7 @@ class CarState(CarStateBase):
     self.buttons_counter = 0
 
     self.cruise_info = {}
+    self.lfa_block_msg = {}
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
     self.cluster_speed = 0
@@ -297,7 +298,8 @@ class CarState(CarStateBase):
       self.buttons_counter = cp.vl[self.cruise_btns_msg_canfd]["COUNTER"]
     ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
 
-    if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
+    # LX3: CAM_0x362 may not exist on CAM bus — skip to avoid can_valid timeout
+    if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING and not is_lx3:
       self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"] if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT
                                           else cp_cam.vl["CAM_0x2a4"])
 
@@ -318,11 +320,13 @@ class CarState(CarStateBase):
     is_lx3 = CP.carFingerprint == CAR.HYUNDAI_PALISADE_HEV_2026
 
     if is_lx3:
-      # LX3: register non-standard messages; use 0 frequency to skip alive checks
+      # LX3: register non-standard messages and problematic standard messages
+      # float('nan') = ignore alive check for messages that may not exist or have irregular timing
       msgs += [
-        ("DOORS_LX3", 0),
-        ("BLINKERS_LX3_LEFT", 0),
-        ("BLINKERS_LX3_RIGHT", 0),
+        ("DOORS_LX3", float('nan')),
+        ("BLINKERS_LX3_LEFT", float('nan')),
+        ("BLINKERS_LX3_RIGHT", float('nan')),
+        ("CRUISE_BUTTONS_ALT", float('nan')),  # exists but not used for buttons on LX3
       ]
     elif not (CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS):
       # TODO: this can be removed once we add dynamic support to vl_all
@@ -330,9 +334,11 @@ class CarState(CarStateBase):
         # this message is 50Hz but the ECU frequently stops transmitting for ~0.5s
         ("CRUISE_BUTTONS", 1)
       ]
+    # LX3: CAM_0x362 may not exist on CAM bus — register with ignore_alive to prevent timeout
+    cam_msgs = [("CAM_0x362", float('nan'))] if is_lx3 else []
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
-      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
+      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_msgs, CanBus(CP).CAM),
     }
 
     # LX3: counter increments by 2 instead of 1 — monkey-patch _add_message
