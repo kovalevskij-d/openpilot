@@ -83,6 +83,10 @@ class CarInterface(CarInterfaceBase):
       if ret.flags & HyundaiFlags.CANFD_CAMERA_SCC:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CAMERA_SCC.value
 
+      # LX3: counter step 2 — tell panda safety to ignore counter validation
+      if candidate == CAR.HYUNDAI_PALISADE_HEV_2026:
+        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.COUNTER_STEP_2.value
+
     else:
       # Shared configuration for non CAN-FD cars
       ret.alphaLongitudinalAvailable = candidate not in UNSUPPORTED_LONGITUDINAL_CAR
