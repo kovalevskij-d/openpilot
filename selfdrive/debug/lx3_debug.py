@@ -265,6 +265,75 @@ def mode_fingerprint(args):
   print("ERROR: carParams not received within 60 seconds. Is openpilot running?")
 
 
+def mode_sendcan(args):
+  """Live monitor of outgoing CAN messages (sendcan) from openpilot."""
+  import cereal.messaging as messaging
+
+  logsendcan = messaging.sub_sock('sendcan')
+  logfile = open(args.log, 'a') if args.log else None
+
+  if logfile:
+    logfile.write(f"\n{'='*60}\nLX3 SendCAN Log — {datetime.now().isoformat()}\n{'='*60}\n")
+
+  start = time.monotonic()
+  msgs = defaultdict(lambda: {"data": b'', "count": 0, "first": time.monotonic(), "last_data": []})
+
+  print("Monitoring sendcan (outgoing CAN messages from openpilot)...")
+  print("If passive mode is active, no messages will appear until openpilot engages.\n")
+
+  while True:
+    sendcan_recv = messaging.drain_sock(logsendcan, wait_for_one=True)
+    for x in sendcan_recv:
+      for y in x.sendcan:
+        key = (y.address, y.src)
+        hex_data = binascii.hexlify(y.dat).decode('ascii')
+        msgs[key]["data"] = y.dat
+        msgs[key]["count"] += 1
+        # Keep last 3 data values to show counter progression
+        msgs[key]["last_data"].append(hex_data)
+        if len(msgs[key]["last_data"]) > 3:
+          msgs[key]["last_data"].pop(0)
+
+        if logfile:
+          logfile.write(f"{time.time():.3f},TX,0x{y.address:03X},{y.src},{hex_data}\n")
+
+    if time.monotonic() - start > 0.3:
+      dd = chr(27) + "[2J"
+      dd += f"LX3 SendCAN Monitor — {datetime.now().strftime('%H:%M:%S')}\n"
+      dd += f"{'='*90}\n"
+
+      if not msgs:
+        dd += "\nNo sendcan messages yet (passive mode — openpilot not engaged)\n"
+      else:
+        dd += f"{'Addr':>6} {'Bus':>3} {'Hz':>6} {'Count':>7}  {'Latest Data':<50} {'Counter bytes'}\n"
+        dd += f"{'-'*90}\n"
+
+        for key in sorted(msgs.keys()):
+          addr, bus = key
+          m = msgs[key]
+          elapsed = time.monotonic() - m["first"]
+          freq = m["count"] / elapsed if elapsed > 0 else 0
+          hex_data = binascii.hexlify(m["data"]).decode('ascii')
+
+          # Show counter byte progression (byte 2 = counter for most CAN-FD msgs)
+          counter_info = ""
+          if len(m["last_data"]) >= 2:
+            counters = []
+            for d in m["last_data"]:
+              if len(d) >= 6:
+                counters.append(int(d[4:6], 16))  # byte 2 (counter)
+            if counters:
+              counter_info = f"cnt: {' -> '.join(str(c) for c in counters)}"
+
+          dd += f"0x{addr:03X} {bus:>3} {freq:6.1f} {m['count']:>7}  {hex_data[:50]:<50} {counter_info}\n"
+
+      print(dd)
+
+      if logfile:
+        logfile.flush()
+      start = time.monotonic()
+
+
 def mode_autolog(args):
   """Background auto-logger: waits for car, logs fingerprint + signals + raw CAN continuously."""
   import cereal.messaging as messaging
@@ -319,17 +388,19 @@ def mode_autolog(args):
                         f"voltage={ps.voltage/1000:.2f}V faults={ps.faults}\n")
           logfile.flush()
 
-    # Phase 2: continuous signal + CAN logging
-    logfile.write(f"\n{'='*60}\nContinuous logging started\n{'='*60}\n\n")
+    # Phase 2: continuous signal + CAN + sendcan logging
+    logfile.write(f"\n{'='*60}\nContinuous logging started (recv + sendcan)\n{'='*60}\n\n")
     logfile.flush()
 
     logcan = messaging.sub_sock('can')
+    logsendcan = messaging.sub_sock('sendcan')
     can_log = open(can_log_path, 'w')
     can_log.write(f"# LX3 CAN log — {datetime.now().isoformat()}\n")
-    can_log.write(f"# timestamp,addr_hex,bus,data_hex\n")
+    can_log.write(f"# dir,timestamp,addr_hex,bus,data_hex,name\n")
 
     last_signal_log = 0
     can_msg_counts = defaultdict(int)
+    sendcan_msg_counts = defaultdict(int)
 
     while True:
       # Log raw CAN for LX3 addresses
@@ -340,7 +411,16 @@ def mode_autolog(args):
           if key in LX3_ADDRS:
             can_msg_counts[key] += 1
             hex_data = binascii.hexlify(y.dat).decode('ascii')
-            can_log.write(f"{time.time():.3f},0x{y.address:03X},{y.src},{hex_data}\n")
+            can_log.write(f"RX,{time.time():.3f},0x{y.address:03X},{y.src},{hex_data},{LX3_ADDRS.get(key, '')}\n")
+
+      # Log ALL sendcan (outgoing CAN messages from openpilot)
+      sendcan_recv = messaging.drain_sock(logsendcan)
+      for x in sendcan_recv:
+        for y in x.sendcan:
+          key = (y.address, y.src)
+          sendcan_msg_counts[key] += 1
+          hex_data = binascii.hexlify(y.dat).decode('ascii')
+          can_log.write(f"TX,{time.time():.3f},0x{y.address:03X},{y.src},{hex_data}\n")
 
       # Log parsed signals every 2 seconds
       sm.update(0)
@@ -373,19 +453,27 @@ def mode_autolog(args):
         can_log.flush()
         last_signal_log = now
 
-        # Every 30 seconds, log CAN message summary
+        # Every 30 seconds, log CAN + sendcan summary
         if int(now) % 30 == 0:
-          logfile.write(f"\n# CAN summary at {datetime.now().strftime('%H:%M:%S')}:\n")
+          logfile.write(f"\n# RX summary at {datetime.now().strftime('%H:%M:%S')}:\n")
           for key in sorted(can_msg_counts.keys()):
             addr, bus = key
-            logfile.write(f"#   0x{addr:03X} bus{bus}: {can_msg_counts[key]} msgs — {LX3_ADDRS.get(key, '?')}\n")
-          # Check missing
+            logfile.write(f"#   RX 0x{addr:03X} bus{bus}: {can_msg_counts[key]} msgs — {LX3_ADDRS.get(key, '?')}\n")
           missing = set(LX3_ADDRS.keys()) - set(can_msg_counts.keys())
           if missing:
             logfile.write(f"#   MISSING:\n")
             for key in sorted(missing):
               addr, bus = key
               logfile.write(f"#     0x{addr:03X} bus{bus} — {LX3_ADDRS[key]}\n")
+
+          if sendcan_msg_counts:
+            logfile.write(f"# TX summary (sendcan):\n")
+            for key in sorted(sendcan_msg_counts.keys()):
+              addr, bus = key
+              logfile.write(f"#   TX 0x{addr:03X} bus{bus}: {sendcan_msg_counts[key]} msgs\n")
+          else:
+            logfile.write(f"# TX: no sendcan messages (passive mode)\n")
+
           logfile.write("\n")
           logfile.flush()
 
@@ -398,8 +486,8 @@ import os
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="LX3 Palisade Hybrid 2026 debug monitor",
                                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument("--mode", choices=["signals", "can", "fingerprint", "autolog"], default="signals",
-                      help="signals=parsed state, can=raw CAN, fingerprint=car detection, autolog=background logger")
+  parser.add_argument("--mode", choices=["signals", "can", "sendcan", "fingerprint", "autolog"], default="signals",
+                      help="signals=parsed state, can=raw CAN, sendcan=outgoing TX monitor, fingerprint=car detection, autolog=background logger")
   parser.add_argument("--log", type=str, default=None,
                       help="log output to file (e.g. /data/lx3_debug.log)")
 
@@ -411,5 +499,7 @@ if __name__ == "__main__":
     mode_can(args)
   elif args.mode == "fingerprint":
     mode_fingerprint(args)
+  elif args.mode == "sendcan":
+    mode_sendcan(args)
   elif args.mode == "autolog":
     mode_autolog(args)
