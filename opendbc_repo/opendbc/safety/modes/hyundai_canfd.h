@@ -33,23 +33,9 @@
   {.msg = {{0xa0, (pt_bus), 24, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
   {.msg = {{0xea, (pt_bus), 24, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
 
-// LX3: counter step 2 — ignore counter validation for all messages
-#define HYUNDAI_CANFD_COMMON_RX_CHECKS_NO_COUNTER(pt_bus)                                                                          \
-  {.msg = {{0x35, (pt_bus), 32, 100U, .ignore_counter = true, .ignore_quality_flag = true},                  \
-           {0x100, (pt_bus), 32, 100U, .ignore_counter = true, .ignore_quality_flag = true},                 \
-           {0x105, (pt_bus), 32, 100U, .ignore_counter = true, .ignore_quality_flag = true}}},               \
-  {.msg = {{0x175, (pt_bus), 24, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
-  {.msg = {{0xa0, (pt_bus), 24, 100U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
-  {.msg = {{0xea, (pt_bus), 24, 100U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
-
 #define HYUNDAI_CANFD_STD_BUTTONS_RX_CHECKS(pt_bus)                                                                                            \
   HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                                                       \
   {.msg = {{0x1cf, (pt_bus), 8, 50U, .ignore_checksum = true, .max_counter = 0xfU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
-
-// LX3: with counter ignored + buttons counter ignored
-#define HYUNDAI_CANFD_STD_BUTTONS_RX_CHECKS_NO_COUNTER(pt_bus)                                                                                 \
-  HYUNDAI_CANFD_COMMON_RX_CHECKS_NO_COUNTER(pt_bus)                                                                                            \
-  {.msg = {{0x1cf, (pt_bus), 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
 
 #define HYUNDAI_CANFD_ALT_BUTTONS_RX_CHECKS(pt_bus)                                                                                              \
   HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                                                         \
@@ -58,10 +44,6 @@
 // SCC_CONTROL (from ADAS unit or camera)
 #define HYUNDAI_CANFD_SCC_ADDR_CHECK(scc_bus)                                                                            \
   {.msg = {{0x1a0, (scc_bus), 32, 50U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
-
-// LX3: SCC with counter ignored
-#define HYUNDAI_CANFD_SCC_ADDR_CHECK_NO_COUNTER(scc_bus)                                                                 \
-  {.msg = {{0x1a0, (scc_bus), 32, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
 
 static bool hyundai_canfd_alt_buttons = false;
 static bool hyundai_canfd_lka_steering_alt = false;
@@ -236,7 +218,6 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
 static safety_config hyundai_canfd_init(uint16_t param) {
   const uint16_t HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT = 128;
   const uint16_t HYUNDAI_PARAM_CANFD_ALT_BUTTONS = 32;
-  const uint16_t HYUNDAI_PARAM_COUNTER_STEP_2 = 1024;  // LX3: counter increments by 2
 
   static const CanMsg HYUNDAI_CANFD_LKA_STEERING_TX_MSGS[] = {
     HYUNDAI_CANFD_LKA_STEERING_COMMON_TX_MSGS(0, 1)
@@ -286,7 +267,6 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);
   hyundai_canfd_lka_steering_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT);
-  bool counter_step_2 = GET_FLAG(param, HYUNDAI_PARAM_COUNTER_STEP_2);
 
   safety_config ret;
   if (hyundai_longitudinal) {
@@ -334,17 +314,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
       };
 
-      // LX3: counter step 2 — ignore counter validation
-      static RxCheck hyundai_canfd_lka_steering_no_counter_rx_checks[] = {
-        HYUNDAI_CANFD_STD_BUTTONS_RX_CHECKS_NO_COUNTER(1)
-        HYUNDAI_CANFD_SCC_ADDR_CHECK_NO_COUNTER(1)
-      };
-
-      if (counter_step_2) {
-        SET_RX_CHECKS(hyundai_canfd_lka_steering_no_counter_rx_checks, ret);
-      } else {
-        SET_RX_CHECKS(hyundai_canfd_lka_steering_rx_checks, ret);
-      }
+      SET_RX_CHECKS(hyundai_canfd_lka_steering_rx_checks, ret);
       if (hyundai_canfd_lka_steering_alt) {
         SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEERING_ALT_TX_MSGS, ret);
       } else {
