@@ -55,6 +55,11 @@
   HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                                                         \
   {.msg = {{0x1aa, (pt_bus), 16, 50U, .ignore_checksum = true, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
 
+// LX3: alt buttons with counter ignored
+#define HYUNDAI_CANFD_ALT_BUTTONS_RX_CHECKS_NO_COUNTER(pt_bus)                                                                                   \
+  HYUNDAI_CANFD_COMMON_RX_CHECKS_NO_COUNTER(pt_bus)                                                                                              \
+  {.msg = {{0x1aa, (pt_bus), 16, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+
 // SCC_CONTROL (from ADAS unit or camera)
 #define HYUNDAI_CANFD_SCC_ADDR_CHECK(scc_bus)                                                                            \
   {.msg = {{0x1a0, (scc_bus), 32, 50U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
@@ -334,9 +339,9 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
       };
 
-      // LX3: counter step 2 — ignore counter validation
+      // LX3: counter step 2 + alt buttons (0x1AA instead of 0x1CF which doesn't exist)
       static RxCheck hyundai_canfd_lka_steering_no_counter_rx_checks[] = {
-        HYUNDAI_CANFD_STD_BUTTONS_RX_CHECKS_NO_COUNTER(1)
+        HYUNDAI_CANFD_ALT_BUTTONS_RX_CHECKS_NO_COUNTER(1)
         HYUNDAI_CANFD_SCC_ADDR_CHECK_NO_COUNTER(1)
       };
 
