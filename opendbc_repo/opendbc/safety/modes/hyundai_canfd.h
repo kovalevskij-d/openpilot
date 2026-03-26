@@ -70,6 +70,15 @@
 
 static bool hyundai_canfd_alt_buttons = false;
 static bool hyundai_canfd_lka_steering_alt = false;
+static bool hyundai_canfd_counter_step_2 = false;
+
+// LX3: block forwarding when controls not allowed to prevent SCC/HBA dashboard faults
+static bool hyundai_canfd_fwd_hook(int bus_num, int addr) {
+  UNUSED(addr);
+  UNUSED(bus_num);
+  // Block all forwarding when counter_step_2 (LX3) and controls not allowed
+  return hyundai_canfd_counter_step_2 && !controls_allowed;
+}
 
 static unsigned int hyundai_canfd_get_lka_addr(void) {
   return hyundai_canfd_lka_steering_alt ? 0x110U : 0x50U;
@@ -292,6 +301,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);
   hyundai_canfd_lka_steering_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT);
   bool counter_step_2 = GET_FLAG(param, HYUNDAI_PARAM_COUNTER_STEP_2);
+  hyundai_canfd_counter_step_2 = counter_step_2;
 
   safety_config ret;
   if (hyundai_longitudinal) {
@@ -411,6 +421,7 @@ const safety_hooks hyundai_canfd_hooks = {
   .init = hyundai_canfd_init,
   .rx = hyundai_canfd_rx_hook,
   .tx = hyundai_canfd_tx_hook,
+  .fwd = hyundai_canfd_fwd_hook,
   .get_counter = hyundai_canfd_get_counter,
   .get_checksum = hyundai_canfd_get_checksum,
   .compute_checksum = hyundai_common_canfd_compute_checksum,
