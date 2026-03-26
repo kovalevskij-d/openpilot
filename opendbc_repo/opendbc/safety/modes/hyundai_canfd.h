@@ -16,6 +16,12 @@
   {0x110, a_can, 32, .check_relay = (a_can) == 0},  /* LKAS_ALT */  \
   {0x362, a_can, 32, .check_relay = (a_can) == 0},  /* CAM_0x362 */ \
 
+// LX3: no relay check — allow camera messages to pass through to ADAS ECU
+#define HYUNDAI_CANFD_LKA_STEERING_ALT_NO_RELAY_TX_MSGS(a_can, e_can) \
+  HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(e_can)                          \
+  {0x110, a_can, 32, .check_relay = false},  /* LKAS_ALT */            \
+  {0x362, a_can, 32, .check_relay = false},  /* CAM_0x362 */           \
+
 #define HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(e_can)  \
   {0x12A, e_can, 16, .check_relay = (e_can) == 0},  /* LFA */            \
   {0x1E0, e_can, 16, .check_relay = (e_can) == 0},  /* LFAHDA_CLUSTER */ \
@@ -353,7 +359,13 @@ static safety_config hyundai_canfd_init(uint16_t param) {
       } else {
         SET_RX_CHECKS(hyundai_canfd_lka_steering_rx_checks, ret);
       }
-      if (hyundai_canfd_lka_steering_alt) {
+      if (counter_step_2 && hyundai_canfd_lka_steering_alt) {
+        // LX3: no relay check — camera messages must pass through to ADAS ECU
+        static const CanMsg HYUNDAI_CANFD_LKA_STEERING_ALT_NO_RELAY[] = {
+          HYUNDAI_CANFD_LKA_STEERING_ALT_NO_RELAY_TX_MSGS(0, 1)
+        };
+        SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEERING_ALT_NO_RELAY, ret);
+      } else if (hyundai_canfd_lka_steering_alt) {
         SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEERING_ALT_TX_MSGS, ret);
       } else {
         SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEERING_TX_MSGS, ret);
