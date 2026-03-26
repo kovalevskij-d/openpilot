@@ -158,9 +158,9 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *msg) {
   if (msg->bus == scc_bus) {
     // cruise state
     if ((msg->addr == 0x1a0U) && !hyundai_longitudinal) {
-      // 1=enabled, 2=driver override
+      // 1=enabled, 2=driver override, 4=LX3 cruise engaged
       int cruise_status = ((msg->data[8] >> 4) & 0x7U);
-      bool cruise_engaged = (cruise_status == 1) || (cruise_status == 2);
+      bool cruise_engaged = (cruise_status == 1) || (cruise_status == 2) || (hyundai_canfd_counter_step_2 && cruise_status == 4);
       hyundai_common_cruise_state_check(cruise_engaged);
     }
   }
