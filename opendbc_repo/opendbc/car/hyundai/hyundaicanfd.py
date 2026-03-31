@@ -48,28 +48,36 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     stock_msg = kwargs.get('stock_lkas_msg', b'')
 
     if len(stock_msg) == 32:
-      # Copy stock message and modify only angle + active flag
+      # Copy stock message, only modify counter + angle/active via packer bit layout
       dat = bytearray(stock_msg)
 
       # Counter step 2
       if msg_addr not in _lx3_counters:
-        _lx3_counters[msg_addr] = dat[2]  # init from stock counter
+        _lx3_counters[msg_addr] = dat[2]
       dat[2] = _lx3_counters[msg_addr]
       _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
 
-      # Set LKAS_ANGLE_ACTIVE: bits 77-78 (byte 9, bits 5-6)
-      dat[9] = (dat[9] & 0x9F) | ((2 if lat_active else 1) << 5)
+      # Use packer to generate a reference message with ONLY angle signals set
+      # Then extract just the angle bits and merge into stock message
+      lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
+      angle_val = apply_angle if lat_active else 0.0
+      active_val = 2 if lat_active else 1
+      _, ref, _ = packer.make_can_msg(lkas_msg, CAN.ACAN, {
+        "ADAS_StrAnglReqVal": angle_val,
+        "LKAS_ANGLE_ACTIVE": active_val,
+      })
 
-      # Set ADAS_StrAnglReqVal: bits 82-95, 14-bit signed, factor 0.1
-      # bit 82 = byte 10 bit 2, 14 bits little-endian across bytes 10-11
-      angle_raw = int(round(apply_angle / 0.1)) if lat_active else 0
-      if angle_raw < 0:
-        angle_raw = (1 << 14) + angle_raw
-      angle_raw &= 0x3FFF
-      dat[10] = (dat[10] & 0x03) | ((angle_raw & 0x3F) << 2)
-      dat[11] = (dat[11] & 0x00) | ((angle_raw >> 6) & 0xFF)
+      # LKAS_ANGLE_ACTIVE: bit 77, 2 bits, big-endian @0+ → byte 9, bits 5-4 (big-endian)
+      # Clear and set from reference
+      dat[9] = (dat[9] & ~0x60) | (ref[9] & 0x60)
 
-      # Recalculate CRC16-XMODEM checksum
+      # ADAS_StrAnglReqVal: bit 82, 14 bits @1- (little-endian signed)
+      # Spans byte 10 bit 2 through byte 11 — copy bytes 10-11 from reference
+      # but preserve bits 0-1 of byte 10 (other signals)
+      dat[10] = (dat[10] & 0x03) | (ref[10] & 0xFC)
+      dat[11] = ref[11]
+
+      # Recalculate checksum
       crc = hkg_can_fd_checksum(msg_addr, None, dat)
       dat[0] = crc & 0xFF
       dat[1] = (crc >> 8) & 0xFF
