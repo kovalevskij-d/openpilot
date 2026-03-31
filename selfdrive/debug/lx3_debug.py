@@ -50,6 +50,9 @@ LX3_ADDRS = {
   (0x2F0, 0): "CRUISE_BUTTONS_ACAN",
   (0x10B, 1): "LKA_BUTTON",
 
+  # SCC_CONTROL for ACCMode monitoring
+  (0x1A0, 1): "SCC_CONTROL",
+
   # Hybrid system
   (0x3E0, 1): "HYBRID_SYS_1",
   (0x3E1, 1): "HYBRID_SYS_2",
@@ -350,7 +353,7 @@ def mode_autolog(args):
     logfile.flush()
 
     # Phase 1: wait for carParams (fingerprint)
-    sm = messaging.SubMaster(['carParams', 'carState', 'pandaStates'])
+    sm = messaging.SubMaster(['carParams', 'carState', 'pandaStates', 'selfdriveState', 'controlsState', 'carControl'])
     fingerprinted = False
 
     while not fingerprinted:
@@ -422,12 +425,12 @@ def mode_autolog(args):
           hex_data = binascii.hexlify(y.dat).decode('ascii')
           can_log.write(f"TX,{time.time():.3f},0x{y.address:03X},{y.src},{hex_data}\n")
 
-      # Log parsed signals every 2 seconds
+      # Log parsed signals every 1 second (was 2s)
       sm.update(0)
       now = time.time()
-      if now - last_signal_log >= 2.0 and sm.valid.get('carState'):
+      if now - last_signal_log >= 1.0 and sm.valid.get('carState'):
         cs = sm['carState']
-        logfile.write(json.dumps({
+        entry = {
           "t": round(now, 3),
           "ts": datetime.now().strftime('%H:%M:%S'),
           "speed_kmh": round(cs.vEgo * 3.6, 1),
@@ -448,7 +451,35 @@ def mode_autolog(args):
           "gear": str(cs.gearShifter),
           "accFault": cs.accFaulted,
           "blockPcm": cs.blockPcmEnable,
-        }) + "\n")
+          "canValid": cs.canValid,
+        }
+        # Panda state
+        if sm.valid.get('pandaStates') and len(sm['pandaStates']) > 0:
+          ps = sm['pandaStates'][0]
+          entry["controlsAllowed"] = ps.controlsAllowed
+          entry["safetyTxBlocked"] = ps.safetyTxBlocked
+          entry["safetyRxInvalid"] = ps.safetyRxInvalid
+          entry["safetyRxChecksInvalid"] = ps.safetyRxChecksInvalid
+        # SelfdriveState
+        if sm.valid.get('selfdriveState'):
+          sd = sm['selfdriveState']
+          entry["sdState"] = str(sd.state)
+          entry["sdEnabled"] = sd.enabled
+          entry["sdActive"] = sd.active
+          entry["alertType"] = sd.alertType
+          entry["alertText1"] = sd.alertText1
+        # ControlsState
+        if sm.valid.get('controlsState'):
+          ct = sm['controlsState']
+          entry["ctActive"] = ct.active
+          entry["ctState"] = str(ct.state)
+        # CarControl
+        if sm.valid.get('carControl'):
+          cc = sm['carControl']
+          entry["ccEnabled"] = cc.enabled
+          entry["latActive"] = cc.latActive
+          entry["steerAngleCmd"] = round(cc.actuators.steeringAngleDeg, 1)
+        logfile.write(json.dumps(entry) + "\n")
         logfile.flush()
         can_log.flush()
         last_signal_log = now
