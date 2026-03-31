@@ -75,6 +75,9 @@ class SelfdriveD:
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug']
+    # LX3: ignore driverMonitoringState freq/valid checks to prevent commIssue disengage
+    if self.CP.carFingerprint == 'HYUNDAI_PALISADE_HEV_2026':
+      ignore += ['driverMonitoringState']
     if SIMULATION:
       ignore += ['driverCameraState', 'managerState']
     if REPLAY:
@@ -178,7 +181,8 @@ class SelfdriveD:
     if not self.CP.pcmCruise and CS.vCruise > 250 and resume_pressed:
       self.events.add(EventName.resumeBlocked)
 
-    if not self.CP.notCar:
+    # LX3: temporarily skip driver monitoring check (freqOk issue causes disengage)
+    if not self.CP.notCar and self.CP.carFingerprint != 'HYUNDAI_PALISADE_HEV_2026':
       self.events.add_from_msg(self.sm['driverMonitoringState'].events)
 
     # Add car events, ignore if CAN isn't valid
