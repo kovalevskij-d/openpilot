@@ -57,6 +57,7 @@ class CarState(CarStateBase):
 
     self.cruise_info = {}
     self.lfa_block_msg = {}
+    self.stock_lkas_msg = b''  # LX3: last stock LKAS_ALT raw message from camera
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
     self.cluster_speed = 0

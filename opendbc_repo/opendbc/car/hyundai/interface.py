@@ -24,6 +24,15 @@ class CarInterface(CarInterfaceBase):
 
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport, structs.CarState.GearShifter.manumatic)
 
+  def update(self, can_packets):
+    # LX3: capture raw stock LKAS_ALT (0x110) from camera bus for relay-based steering
+    cam_bus = CanBus(self.CP).CAM
+    for packet in can_packets:
+      for msg in packet:
+        if msg.address == 0x110 and msg.src == cam_bus:
+          self.CS.stock_lkas_msg = msg.dat
+    return super().update(can_packets)
+
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "hyundai"

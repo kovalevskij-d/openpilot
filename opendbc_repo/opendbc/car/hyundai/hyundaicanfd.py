@@ -39,47 +39,56 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle=0.0):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle=0.0, **kwargs):
   is_lx3 = CP.carFingerprint == CAR.HYUNDAI_PALISADE_HEV_2026
 
-  # LX3: angle-based steering — match stock camera signal values exactly
+  # LX3: angle-based steering — relay stock message with modified angle
   if is_lx3:
-    lkas_values = {
-      "LKA_MODE": 0,        # stock always 0
-      "LKA_ICON": 1,        # stock always 1 (grey) — EPS may reject other values
-      "TORQUE_REQUEST": 0,   # stock always 0 — not used for angle steering
-      "LKA_ASSIST": 0,
-      "STEER_REQ": 0,        # stock always 0 — not used for angle steering
-      "STEER_MODE": 0,       # stock always 0
-      "HAS_LANE_SAFETY": 0,
-      "NEW_SIGNAL_2": 0,     # stock always 0
-      "DAMP_FACTOR": 0,      # stock always 0
-      "LKA_AVAILABLE": 0,
-      "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,  # 1=idle, 2=active
-      "ADAS_StrAnglReqVal": apply_angle if lat_active else 0.0,
-    }
-    # Counter step 2
     msg_addr = 0x110 if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else 0x50
-    if msg_addr not in _lx3_counters:
-      _lx3_counters[msg_addr] = 0
-    lkas_values["COUNTER"] = _lx3_counters[msg_addr]
-    _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
+    stock_msg = kwargs.get('stock_lkas_msg', b'')
 
-    lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
-    addr, dat, bus = packer.make_can_msg(lkas_msg, CAN.ACAN, lkas_values)
-    # Copy stock constant bytes that are not in DBC but EPS may check
-    dat = bytearray(dat)
-    dat[13] = 0x89  # stock constant
-    dat[24] = 0x07  # stock constant
-    dat[28] = 0x50  # stock constant
-    dat[29] = 0x04  # stock constant
-    dat[30] = 0xFF  # stock constant
-    dat[31] = 0xFF  # stock constant
-    # Recalculate checksum after modifying raw bytes
-    crc = CRC16_XMODEM(dat[2:])
-    dat[0] = crc & 0xFF
-    dat[1] = (crc >> 8) & 0xFF
-    return [(addr, bytes(dat), bus)]
+    if len(stock_msg) == 32:
+      # Copy stock message and modify only angle + active flag
+      dat = bytearray(stock_msg)
+
+      # Counter step 2
+      if msg_addr not in _lx3_counters:
+        _lx3_counters[msg_addr] = dat[2]  # init from stock counter
+      dat[2] = _lx3_counters[msg_addr]
+      _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
+
+      # Set LKAS_ANGLE_ACTIVE: bits 77-78 (byte 9, bits 5-6)
+      dat[9] = (dat[9] & 0x9F) | ((2 if lat_active else 1) << 5)
+
+      # Set ADAS_StrAnglReqVal: bits 82-95, 14-bit signed, factor 0.1
+      # bit 82 = byte 10 bit 2, 14 bits little-endian across bytes 10-11
+      angle_raw = int(round(apply_angle / 0.1)) if lat_active else 0
+      if angle_raw < 0:
+        angle_raw = (1 << 14) + angle_raw
+      angle_raw &= 0x3FFF
+      dat[10] = (dat[10] & 0x03) | ((angle_raw & 0x3F) << 2)
+      dat[11] = (dat[11] & 0x00) | ((angle_raw >> 6) & 0xFF)
+
+      # Recalculate CRC16-XMODEM checksum
+      crc = CRC16_XMODEM(dat[2:])
+      dat[0] = crc & 0xFF
+      dat[1] = (crc >> 8) & 0xFF
+
+      return [(msg_addr, bytes(dat), CAN.ACAN)]
+    else:
+      # No stock message yet — send idle
+      lkas_values = {
+        "LKA_MODE": 0, "LKA_ICON": 1, "TORQUE_REQUEST": 0, "LKA_ASSIST": 0,
+        "STEER_REQ": 0, "STEER_MODE": 0, "HAS_LANE_SAFETY": 0, "NEW_SIGNAL_2": 0,
+        "DAMP_FACTOR": 0, "LKA_AVAILABLE": 0, "LKAS_ANGLE_ACTIVE": 1,
+        "ADAS_StrAnglReqVal": 0.0,
+      }
+      if msg_addr not in _lx3_counters:
+        _lx3_counters[msg_addr] = 0
+      lkas_values["COUNTER"] = _lx3_counters[msg_addr]
+      _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
+      lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
+      return [packer.make_can_msg(lkas_msg, CAN.ACAN, lkas_values)]
 
   # Standard torque-based steering for all other cars
   common_values = {
