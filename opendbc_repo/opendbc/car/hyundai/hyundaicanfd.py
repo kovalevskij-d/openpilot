@@ -70,7 +70,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       dat[11] = (dat[11] & 0x00) | ((angle_raw >> 6) & 0xFF)
 
       # Recalculate CRC16-XMODEM checksum
-      crc = CRC16_XMODEM(dat[2:])
+      crc = hkg_can_fd_checksum(msg_addr, None, dat)
       dat[0] = crc & 0xFF
       dat[1] = (crc >> 8) & 0xFF
 
