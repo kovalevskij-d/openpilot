@@ -65,23 +65,22 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       _, ref, _ = packer.make_can_msg(lkas_msg, CAN.ACAN, {
         "ADAS_StrAnglReqVal": angle_val,
         "LKAS_ANGLE_ACTIVE": active_val,
+        "LKA_AVAILABLE": 3 if lat_active else 0,  # lane recognition — EPS requires 3 for active steering
+        "ADAS_ACIAnglTqRedcGainVal": 0.5 if lat_active else 0.0,  # torque authority (0.004 factor, raw 125)
       })
 
-      # LKAS_ANGLE_ACTIVE: bit 77, 2 bits, big-endian @0+ → byte 9, bits 5-4 (big-endian)
-      # Clear and set from reference
+      # LKAS_ANGLE_ACTIVE: bit 77, 2 bits, big-endian @0+
       dat[9] = (dat[9] & ~0x60) | (ref[9] & 0x60)
 
+      # LKA_AVAILABLE (LKA_RcgSta): bit 27, 3 bits @1+ — byte 3, bits 3-5
+      dat[3] = (dat[3] & ~0x38) | (ref[3] & 0x38)
+
       # ADAS_StrAnglReqVal: bit 82, 14 bits @1- (little-endian signed)
-      # Spans byte 10 bit 2 through byte 11 — copy bytes 10-11 from reference
-      # but preserve bits 0-1 of byte 10 (other signals)
       dat[10] = (dat[10] & 0x03) | (ref[10] & 0xFC)
       dat[11] = ref[11]
 
-      # ADAS_ACIAnglTqRedcGainVal: bit 96, 8 bits @1+ (factor 0.004)
-      # = byte 12. Controls EPS torque authority for angle steering.
-      # 0 = no torque (EPS won't move), 125 = 0.5, 250 = 1.0 (max)
-      # Stock camera sends 0 when idle — EPS ignores angle without this!
-      dat[12] = 125 if lat_active else 0  # 0.5 = moderate steering authority
+      # ADAS_ACIAnglTqRedcGainVal: bit 96, 8 bits @1+ = byte 12
+      dat[12] = ref[12]
 
       # Recalculate checksum
       crc = hkg_can_fd_checksum(msg_addr, None, dat)
