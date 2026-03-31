@@ -53,6 +53,9 @@ LX3_ADDRS = {
   # SCC_CONTROL for ACCMode monitoring
   (0x1A0, 1): "SCC_CONTROL",
 
+  # Stock camera LKAS_ALT on bus 2 (for angle comparison)
+  (0x110, 2): "LKAS_ALT_stock_cam",
+
   # Hybrid system
   (0x3E0, 1): "HYBRID_SYS_1",
   (0x3E1, 1): "HYBRID_SYS_2",
@@ -402,6 +405,8 @@ def mode_autolog(args):
     can_log.write(f"# dir,timestamp,addr_hex,bus,data_hex,name\n")
 
     last_signal_log = 0
+    last_state_key = ""
+    last_acc_mode = -1
     can_msg_counts = defaultdict(int)
     sendcan_msg_counts = defaultdict(int)
 
@@ -416,6 +421,14 @@ def mode_autolog(args):
             hex_data = binascii.hexlify(y.dat).decode('ascii')
             can_log.write(f"RX,{time.time():.3f},0x{y.address:03X},{y.src},{hex_data},{LX3_ADDRS.get(key, '')}\n")
 
+          # Track raw ACCMode changes from SCC_CONTROL
+          if y.address == 0x1A0 and y.src == 1 and len(y.dat) > 8:
+            acc_mode = (y.dat[8] >> 4) & 0x7
+            if acc_mode != last_acc_mode:
+              logfile.write(f"# ACCMode: {last_acc_mode} -> {acc_mode} at {datetime.now().strftime('%H:%M:%S.%f')}\n")
+              logfile.flush()
+              last_acc_mode = acc_mode
+
       # Log ALL sendcan (outgoing CAN messages from openpilot)
       sendcan_recv = messaging.drain_sock(logsendcan)
       for x in sendcan_recv:
@@ -424,6 +437,13 @@ def mode_autolog(args):
           sendcan_msg_counts[key] += 1
           hex_data = binascii.hexlify(y.dat).decode('ascii')
           can_log.write(f"TX,{time.time():.3f},0x{y.address:03X},{y.src},{hex_data}\n")
+
+          # Parse and log TX 0x110 angle details (every 50th message to avoid spam)
+          if y.address == 0x110 and sendcan_msg_counts[key] % 50 == 1:
+            d = y.dat
+            tq_gain = d[12] if len(d) > 12 else 0
+            logfile.write(f"# TX_0x110: cnt={d[2]} tqGain={tq_gain} raw_9_10_11=0x{d[9]:02x}{d[10]:02x}{d[11]:02x} at {datetime.now().strftime('%H:%M:%S.%f')}\n")
+            logfile.flush()
 
       # Log parsed signals every 1 second (was 2s)
       sm.update(0)
@@ -452,6 +472,10 @@ def mode_autolog(args):
           "accFault": cs.accFaulted,
           "blockPcm": cs.blockPcmEnable,
           "canValid": cs.canValid,
+          "canTimeout": cs.canTimeout,
+          "steerFaultPerm": cs.steerFaultPermanent,
+          "cruiseStandstill": cs.cruiseState.standstill,
+          "steerAngleOffset": round(cs.steeringAngleOffsetDeg, 1) if hasattr(cs, 'steeringAngleOffsetDeg') else 0,
         }
         # Panda state
         if sm.valid.get('pandaStates') and len(sm['pandaStates']) > 0:
@@ -480,6 +504,12 @@ def mode_autolog(args):
           entry["latActive"] = cc.latActive
           entry["steerAngleCmd"] = round(cc.actuators.steeringAngleDeg, 1)
         logfile.write(json.dumps(entry) + "\n")
+
+        # Event-driven: log immediately on state changes (not just every 1s)
+        state_key = f"{entry.get('cruiseEnabled')},{entry.get('sdState')},{entry.get('alertType')},{entry.get('controlsAllowed')},{entry.get('latActive')},{entry.get('gear')}"
+        if state_key != last_state_key:
+          logfile.write(f"# STATE_CHANGE at {entry['ts']}: cruise={entry.get('cruiseEnabled')} sd={entry.get('sdState')} alert={entry.get('alertType')} allowed={entry.get('controlsAllowed')} latActive={entry.get('latActive')} gear={entry.get('gear')} spd={entry.get('speed_kmh')}\n")
+          last_state_key = state_key
         logfile.flush()
         can_log.flush()
         last_signal_log = now
