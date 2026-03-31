@@ -46,7 +46,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   if is_lx3:
     lkas_values = {
       "LKA_MODE": 0,        # stock always 0
-      "LKA_ICON": 2 if enabled else 1,
+      "LKA_ICON": 1,        # stock always 1 (grey) — EPS may reject other values
       "TORQUE_REQUEST": 0,   # stock always 0 — not used for angle steering
       "LKA_ASSIST": 0,
       "STEER_REQ": 0,        # stock always 0 — not used for angle steering
@@ -66,7 +66,20 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
 
     lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
-    return [packer.make_can_msg(lkas_msg, CAN.ACAN, lkas_values)]
+    addr, dat, bus = packer.make_can_msg(lkas_msg, CAN.ACAN, lkas_values)
+    # Copy stock constant bytes that are not in DBC but EPS may check
+    dat = bytearray(dat)
+    dat[13] = 0x89  # stock constant
+    dat[24] = 0x07  # stock constant
+    dat[28] = 0x50  # stock constant
+    dat[29] = 0x04  # stock constant
+    dat[30] = 0xFF  # stock constant
+    dat[31] = 0xFF  # stock constant
+    # Recalculate checksum after modifying raw bytes
+    crc = CRC16_XMODEM(dat[2:])
+    dat[0] = crc & 0xFF
+    dat[1] = (crc >> 8) & 0xFF
+    return [(addr, bytes(dat), bus)]
 
   # Standard torque-based steering for all other cars
   common_values = {
