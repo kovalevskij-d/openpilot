@@ -163,17 +163,15 @@ class CarController(CarControllerBase):
   def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
     can_sends = []
 
-    # LX3: passive mode — don't send ANY CAN messages unless openpilot is actively engaged
-    # This prevents SCC/HBA faults on the car's dashboard
-    if self.CP.carFingerprint == CAR.HYUNDAI_PALISADE_HEV_2026 and not (CC.enabled or CC.latActive):
-      return can_sends
+    # LX3: NO passive mode — always send LKAS_ALT to keep ADAS ECU alive
+    # (sunnypilot always sends, just with ACTIVE=1 and gain=0 when not engaged)
 
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
     # steering control
     apply_angle = CC.actuators.steeringAngleDeg if self.CP.steerControlType == structs.CarParams.SteerControlType.angle else 0.0
-    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle,
+    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, CC.latActive, apply_torque, apply_angle,
                                                             stock_lkas_msg=CS.stock_lkas_msg))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU

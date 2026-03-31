@@ -48,7 +48,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     stock_msg = kwargs.get('stock_lkas_msg', b'')
 
     if len(stock_msg) == 32:
-      # Copy stock message, only modify counter + angle/active via packer bit layout
+      # Copy stock message, modify angle + zero conflicting torque signals
       dat = bytearray(stock_msg)
 
       # Counter step 2
@@ -57,33 +57,42 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       dat[2] = _lx3_counters[msg_addr]
       _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
 
-      # Use packer to generate a reference message with ONLY angle signals set
-      # Then extract just the angle bits and merge into stock message
+      # Use packer for ADAS_StrAnglReqVal (14-bit signed encoding)
       lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
       angle_val = apply_angle if lat_active else 0.0
-      active_val = 2 if lat_active else 1
-      # Use packer ONLY for ADAS_StrAnglReqVal (complex 14-bit signed encoding)
       _, ref, _ = packer.make_can_msg(lkas_msg, CAN.ACAN, {
         "ADAS_StrAnglReqVal": angle_val,
       })
 
-      # ADAS_StrAnglReqVal: bit 82, 14 bits @1- (little-endian signed)
+      # ADAS_StrAnglReqVal: bit 82, 14 bits @1-
       dat[10] = (dat[10] & 0x03) | (ref[10] & 0xFC)
       dat[11] = ref[11]
 
-      # LKAS_ANGLE_ACTIVE: bit 77|2 @0+ (big-endian)
-      # byte 9: bit 5 = MSB, bit 4 = LSB of 2-bit field
+      # LKAS_ANGLE_ACTIVE: bit 77|2 @0+ (byte 9 bits 4-5)
       lkas_active = 2 if lat_active else 1
       dat[9] = (dat[9] & ~0x30) | ((lkas_active & 0x3) << 4)
 
-      # LKA_AVAILABLE (LKA_RcgSta): bit 27|3 @1+ (little-endian)
-      # byte 3: bits 3-5
+      # LKA_RcgSta (LKA_AVAILABLE): bit 27|3 @1+ (byte 3 bits 3-5) — 3 BITS not 2!
       lka_avail = 3 if lat_active else 0
       dat[3] = (dat[3] & ~0x38) | ((lka_avail & 0x7) << 3)
 
-      # ADAS_ACIAnglTqRedcGainVal: bit 96|8 @1+ = byte 12, factor 0.004
-      # raw 125 = 0.5 physical
+      # ADAS_ACIAnglTqRedcGainVal: byte 12, factor 0.004, raw 125=0.5
       dat[12] = 125 if lat_active else 0
+
+      # CRITICAL: zero out torque signals to avoid conflict with angle mode
+      # StrTqReqVal (TORQUE_REQUEST): bit 41|11 @1+ — bytes 5-6
+      dat[5] = (dat[5] & 0x01)  # clear bits 1-7 of byte 5
+      dat[6] = (dat[6] & 0xF0)  # clear bits 0-3 of byte 6
+      # Then set StrTqReqVal = 1024 (zero point, offset -1024)
+      torque_zero = 1024  # raw value for 0 torque (offset = -1024)
+      dat[5] = (dat[5] & 0x01) | ((torque_zero & 0x7F) << 1)
+      dat[6] = (dat[6] & 0xF0) | ((torque_zero >> 7) & 0x0F)
+
+      # ActToiSta (STEER_REQ): bit 52|2 @1+ — byte 6 bits 4-5, set to 0
+      dat[6] = dat[6] & ~0x30
+
+      # Damping_Gain: byte 8, set to 100 (sunnypilot uses 100)
+      dat[8] = 100
 
       # Recalculate checksum
       crc = hkg_can_fd_checksum(msg_addr, None, dat)
