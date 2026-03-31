@@ -77,6 +77,12 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       dat[10] = (dat[10] & 0x03) | (ref[10] & 0xFC)
       dat[11] = ref[11]
 
+      # ADAS_ACIAnglTqRedcGainVal: bit 96, 8 bits @1+ (factor 0.004)
+      # = byte 12. Controls EPS torque authority for angle steering.
+      # 0 = no torque (EPS won't move), 125 = 0.5, 250 = 1.0 (max)
+      # Stock camera sends 0 when idle — EPS ignores angle without this!
+      dat[12] = 125 if lat_active else 0  # 0.5 = moderate steering authority
+
       # Recalculate checksum
       crc = hkg_can_fd_checksum(msg_addr, None, dat)
       dat[0] = crc & 0xFF
