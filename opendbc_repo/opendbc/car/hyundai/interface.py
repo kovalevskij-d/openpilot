@@ -29,8 +29,12 @@ class CarInterface(CarInterfaceBase):
     cam_bus = CanBus(self.CP).CAM
     for _, msgs in can_packets:
       for msg in msgs:
-        if msg.address == 0x110 and msg.src == cam_bus:
-          self.CS.stock_lkas_msg = msg.dat
+        # CanData may be tuple (address, dat, src) or NamedTuple
+        addr = msg[0] if isinstance(msg, tuple) else msg.address
+        src = msg[2] if isinstance(msg, tuple) else msg.src
+        dat = msg[1] if isinstance(msg, tuple) else msg.dat
+        if addr == 0x110 and src == cam_bus:
+          self.CS.stock_lkas_msg = dat
     return super().update(can_packets)
 
   @staticmethod
