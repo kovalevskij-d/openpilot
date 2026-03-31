@@ -2,7 +2,10 @@ import copy
 import numpy as np
 from opendbc.car import CanBusBase
 from opendbc.car.crc import CRC16_XMODEM
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import HyundaiFlags, CAR
+
+# LX3: counter step 2 tracking for TX messages
+_lx3_counters: dict[int, int] = {}
 
 
 class CanBus(CanBusBase):
@@ -58,6 +61,13 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque)
   ret = []
   if CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
     lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
+    # LX3: counter step 2 — explicitly set counter with +2 increment
+    if CP.carFingerprint == CAR.HYUNDAI_PALISADE_HEV_2026:
+      msg_addr = 0x110 if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else 0x50
+      if msg_addr not in _lx3_counters:
+        _lx3_counters[msg_addr] = 0
+      lkas_values["COUNTER"] = _lx3_counters[msg_addr]
+      _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
     if CP.openpilotLongitudinalControl:
       ret.append(packer.make_can_msg("LFA", CAN.ECAN, lfa_values))
     ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, lkas_values))
