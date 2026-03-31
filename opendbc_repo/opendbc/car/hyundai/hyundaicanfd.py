@@ -39,7 +39,36 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle=0.0):
+  is_lx3 = CP.carFingerprint == CAR.HYUNDAI_PALISADE_HEV_2026
+
+  # LX3: angle-based steering — match stock camera signal values exactly
+  if is_lx3:
+    lkas_values = {
+      "LKA_MODE": 0,        # stock always 0
+      "LKA_ICON": 2 if enabled else 1,
+      "TORQUE_REQUEST": 0,   # stock always 0 — not used for angle steering
+      "LKA_ASSIST": 0,
+      "STEER_REQ": 0,        # stock always 0 — not used for angle steering
+      "STEER_MODE": 0,       # stock always 0
+      "HAS_LANE_SAFETY": 0,
+      "NEW_SIGNAL_2": 0,     # stock always 0
+      "DAMP_FACTOR": 0,      # stock always 0
+      "LKA_AVAILABLE": 0,
+      "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,  # 1=idle, 2=active
+      "ADAS_StrAnglReqVal": apply_angle if lat_active else 0.0,
+    }
+    # Counter step 2
+    msg_addr = 0x110 if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else 0x50
+    if msg_addr not in _lx3_counters:
+      _lx3_counters[msg_addr] = 0
+    lkas_values["COUNTER"] = _lx3_counters[msg_addr]
+    _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
+
+    lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
+    return [packer.make_can_msg(lkas_msg, CAN.ACAN, lkas_values)]
+
+  # Standard torque-based steering for all other cars
   common_values = {
     "LKA_MODE": 2,
     "LKA_ICON": 2 if enabled else 1,
@@ -61,13 +90,6 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque)
   ret = []
   if CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
     lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
-    # LX3: counter step 2 — explicitly set counter with +2 increment
-    if CP.carFingerprint == CAR.HYUNDAI_PALISADE_HEV_2026:
-      msg_addr = 0x110 if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else 0x50
-      if msg_addr not in _lx3_counters:
-        _lx3_counters[msg_addr] = 0
-      lkas_values["COUNTER"] = _lx3_counters[msg_addr]
-      _lx3_counters[msg_addr] = (_lx3_counters[msg_addr] + 2) % 256
     if CP.openpilotLongitudinalControl:
       ret.append(packer.make_can_msg("LFA", CAN.ECAN, lfa_values))
     ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, lkas_values))
