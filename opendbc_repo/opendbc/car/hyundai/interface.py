@@ -27,8 +27,8 @@ class CarInterface(CarInterfaceBase):
   def update(self, can_packets):
     # LX3: capture raw stock LKAS_ALT (0x110) from camera bus for relay-based steering
     cam_bus = CanBus(self.CP).CAM
-    for packet in can_packets:
-      for msg in packet:
+    for _, msgs in can_packets:
+      for msg in msgs:
         if msg.address == 0x110 and msg.src == cam_bus:
           self.CS.stock_lkas_msg = msg.dat
     return super().update(can_packets)
