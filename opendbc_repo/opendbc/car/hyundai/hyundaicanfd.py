@@ -62,25 +62,28 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
       angle_val = apply_angle if lat_active else 0.0
       active_val = 2 if lat_active else 1
+      # Use packer ONLY for ADAS_StrAnglReqVal (complex 14-bit signed encoding)
       _, ref, _ = packer.make_can_msg(lkas_msg, CAN.ACAN, {
         "ADAS_StrAnglReqVal": angle_val,
-        "LKAS_ANGLE_ACTIVE": active_val,
-        "LKA_AVAILABLE": 3 if lat_active else 0,  # lane recognition — EPS requires 3 for active steering
-        "ADAS_ACIAnglTqRedcGainVal": 0.5 if lat_active else 0.0,  # torque authority (0.004 factor, raw 125)
       })
-
-      # LKAS_ANGLE_ACTIVE: bit 77, 2 bits, big-endian @0+
-      dat[9] = (dat[9] & ~0x60) | (ref[9] & 0x60)
-
-      # LKA_AVAILABLE (LKA_RcgSta): bit 27, 3 bits @1+ — byte 3, bits 3-5
-      dat[3] = (dat[3] & ~0x38) | (ref[3] & 0x38)
 
       # ADAS_StrAnglReqVal: bit 82, 14 bits @1- (little-endian signed)
       dat[10] = (dat[10] & 0x03) | (ref[10] & 0xFC)
       dat[11] = ref[11]
 
-      # ADAS_ACIAnglTqRedcGainVal: bit 96, 8 bits @1+ = byte 12
-      dat[12] = ref[12]
+      # LKAS_ANGLE_ACTIVE: bit 77|2 @0+ (big-endian)
+      # byte 9: bit 5 = MSB, bit 4 = LSB of 2-bit field
+      lkas_active = 2 if lat_active else 1
+      dat[9] = (dat[9] & ~0x30) | ((lkas_active & 0x3) << 4)
+
+      # LKA_AVAILABLE (LKA_RcgSta): bit 27|3 @1+ (little-endian)
+      # byte 3: bits 3-5
+      lka_avail = 3 if lat_active else 0
+      dat[3] = (dat[3] & ~0x38) | ((lka_avail & 0x7) << 3)
+
+      # ADAS_ACIAnglTqRedcGainVal: bit 96|8 @1+ = byte 12, factor 0.004
+      # raw 125 = 0.5 physical
+      dat[12] = 125 if lat_active else 0
 
       # Recalculate checksum
       crc = hkg_can_fd_checksum(msg_addr, None, dat)
